@@ -237,6 +237,9 @@ export class BrewImportService {
    * creation check and the write. The download is the one a shared bean's
    * `external_images` go through. It skips an image it cannot fetch, and any
    * other failure here is only logged: the bean stays, without a photo.
+   *
+   * The spinner covers only the download and is gone before this returns, so
+   * it never sits over the next creation prompt.
    */
   private async attachHandoffBeanImage(
     created: Bean,
@@ -246,22 +249,55 @@ export class BrewImportService {
     if (url === undefined) {
       return;
     }
+    // Write to the stored entry rather than the clone `addAndConfirm` handed
+    // back, so the update below cannot put back anything older.
+    const stored: unknown = this.beanStorage.getByUUID(created.config.uuid);
+    const bean = stored instanceof Bean ? stored : created;
+    const attachmentsBefore = bean.attachments.length;
     try {
-      await this.uiBeanHelper.downloadAndAddAttachAttachments(created, [url]);
-      if (created.attachments.length === 0) {
+      await this.uiAlert.showLoadingSpinner();
+      await this.uiBeanHelper.downloadAndAddAttachAttachments(bean, [url]);
+      if (bean.attachments.length === attachmentsBefore) {
+        this.uiLog.debug(
+          'Handoff bean image not attached, no JPEG or PNG was downloaded: ' +
+            url,
+        );
         return;
       }
-      const didUpdate = await this.beanStorage.update(created);
+      const didUpdate = await this.beanStorage.update(bean);
       if (!didUpdate) {
         this.uiLog.error(
-          'Handoff bean image could not be saved: ' + created.config.uuid,
+          'Handoff bean image could not be saved: ' + bean.config.uuid,
         );
       }
     } catch (ex) {
       this.uiLog.error(
-        'Handoff bean image could not be saved: ' + created.config.uuid,
+        'Handoff bean image could not be saved: ' + bean.config.uuid,
         ex,
       );
+      await this.removeHandoffBeanImages(
+        bean,
+        bean.attachments.slice(attachmentsBefore),
+      );
+    } finally {
+      await this.uiAlert.hideLoadingSpinner();
+    }
+  }
+
+  private async removeHandoffBeanImages(
+    bean: Bean,
+    paths: string[],
+  ): Promise<void> {
+    for (const path of paths) {
+      const index = bean.attachments.indexOf(path);
+      if (index >= 0) {
+        bean.attachments.splice(index, 1);
+      }
+      try {
+        await this.fileHelper.deleteInternalFile(path);
+      } catch (ex) {
+        this.uiLog.error('Handoff bean image cleanup failed: ' + path, ex);
+      }
     }
   }
 

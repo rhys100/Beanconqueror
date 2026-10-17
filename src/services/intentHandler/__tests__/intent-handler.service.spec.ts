@@ -21,6 +21,7 @@ import { UIBeanHelper } from '../../uiBeanHelper';
 import { UIBeanStorage } from '../../uiBeanStorage';
 import { UIBrewHelper } from '../../uiBrewHelper';
 import { UIBrewStorage } from '../../uiBrewStorage';
+import { UIFileHelper } from '../../uiFileHelper';
 import { UIHelper } from '../../uiHelper';
 import { UILog } from '../../uiLog';
 import { UIMillStorage } from '../../uiMillStorage';
@@ -140,6 +141,7 @@ describe('IntentHandlerService', () => {
   let preparationStorage: jasmine.SpyObj<UIPreparationStorage>;
   let brewStorage: jasmine.SpyObj<UIBrewStorage>;
   let settingsStorage: jasmine.SpyObj<UISettingsStorage>;
+  let uiFileHelper: jasmine.SpyObj<UIFileHelper>;
   let envelope: IHandoffEnvelope;
   let url: string;
 
@@ -190,8 +192,11 @@ describe('IntentHandlerService', () => {
     beanStorage = jasmine.createSpyObj('UIBeanStorage', [
       'attachOnEvent',
       'getAllEntries',
+      'getByUUID',
       'removeByUUID',
     ]);
+    uiFileHelper = jasmine.createSpyObj('UIFileHelper', ['deleteInternalFile']);
+    uiFileHelper.deleteInternalFile.and.resolveTo();
     millStorage = jasmine.createSpyObj('UIMillStorage', [
       'attachOnEvent',
       'getAllEntries',
@@ -311,6 +316,7 @@ describe('IntentHandlerService', () => {
         { provide: UIPreparationStorage, useValue: preparationStorage },
         { provide: UIBrewStorage, useValue: brewStorage },
         { provide: UISettingsStorage, useValue: settingsStorage },
+        { provide: UIFileHelper, useValue: uiFileHelper },
         {
           provide: ModalController,
           useValue: jasmine.createSpyObj('ModalController', ['create']),
@@ -416,6 +422,62 @@ describe('IntentHandlerService', () => {
       ['bean-created'],
     ]);
     expect(brewImportService.import.calls.count()).toBe(0);
+  });
+
+  it('deletes the photo files of a handoff-created bean it removes', async () => {
+    brewImportService.ensureBeanFromHandoff.and.resolveTo('bean-created');
+    beanStorage.getByUUID.and.returnValue({
+      attachments: ['download_image_1.jpg'],
+    });
+    preparationStorage.getAllEntries.and.returnValue([]);
+
+    await service.handleDeepLink(url);
+
+    expect(beanStorage.getByUUID.calls.allArgs()).toEqual([['bean-created']]);
+    expect(beanStorage.removeByUUID.calls.allArgs()).toEqual([
+      ['bean-created'],
+    ]);
+    expect(uiFileHelper.deleteInternalFile.calls.allArgs()).toEqual([
+      ['download_image_1.jpg'],
+    ]);
+  });
+
+  it('keeps the photo files when a handoff-created bean could not be removed', async () => {
+    brewImportService.ensureBeanFromHandoff.and.resolveTo('bean-created');
+    beanStorage.getByUUID.and.returnValue({
+      attachments: ['download_image_1.jpg'],
+    });
+    beanStorage.removeByUUID.and.resolveTo(false);
+    preparationStorage.getAllEntries.and.returnValue([]);
+
+    await service.handleDeepLink(url);
+
+    expect(uiFileHelper.deleteInternalFile.calls.count()).toBe(0);
+  });
+
+  it('still removes a handoff-created bean when deleting its photo fails', async () => {
+    brewImportService.ensureBeanFromHandoff.and.resolveTo('bean-created');
+    brewImportService.import.and.rejectWith(new Error('Import failed'));
+    beanStorage.getByUUID.and.returnValue({
+      attachments: ['download_image_1.jpg'],
+    });
+    uiFileHelper.deleteInternalFile.and.rejectWith(new Error('gone'));
+
+    await service.handleDeepLink(url);
+
+    expect(beanStorage.removeByUUID.calls.allArgs()).toEqual([
+      ['bean-created'],
+    ]);
+    expect(uiLog.error.calls.allArgs()).toContain([
+      'Import brew from handoff link failed to delete bean photo: download_image_1.jpg',
+      new Error('gone'),
+    ]);
+    expect(uiAlert.showMessage.calls.allArgs()).toContain([
+      'BREW_IMPORT_FAILED',
+      'ERROR_OCCURED',
+      undefined,
+      true,
+    ]);
   });
 
   it('blocks brew handoff import when only archived beans are available', async () => {
@@ -1408,6 +1470,9 @@ describe('IntentHandlerService', () => {
       },
     );
     preparationStorage.getAllEntries.and.returnValue([]);
+    beanStorage.getByUUID.and.callFake(
+      (uuid: string) => ({ attachments: [uuid + '.jpg'] }) as never,
+    );
     const batchUrl = batchHandoffUrl(
       await gzipBase64Url({ v: 1, brews: [first, second, third] }),
     );
@@ -1423,6 +1488,11 @@ describe('IntentHandlerService', () => {
       ['bean-created-first'],
       ['bean-created-second'],
       ['bean-created-third'],
+    ]);
+    expect(uiFileHelper.deleteInternalFile.calls.allArgs()).toEqual([
+      ['bean-created-first.jpg'],
+      ['bean-created-second.jpg'],
+      ['bean-created-third.jpg'],
     ]);
     expect(brewImportService.import.calls.count()).toBe(0);
     expect(uiAlert.showLoadingSpinner.calls.count()).toBe(0);

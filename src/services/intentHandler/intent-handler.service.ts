@@ -18,6 +18,7 @@ import { UIAnalytics } from '../uiAnalytics';
 import { UIBeanHelper } from '../uiBeanHelper';
 import { UIBeanStorage } from '../uiBeanStorage';
 import { UIBrewHelper } from '../uiBrewHelper';
+import { UIFileHelper } from '../uiFileHelper';
 import { UIHelper } from '../uiHelper';
 import { UILog } from '../uiLog';
 import { UIMillStorage } from '../uiMillStorage';
@@ -67,6 +68,7 @@ export class IntentHandlerService {
   private readonly uiAlert = inject(UIAlert);
   private readonly uiAnalytics = inject(UIAnalytics);
   private readonly beanStorage = inject(UIBeanStorage);
+  private readonly uiFileHelper = inject(UIFileHelper);
   private readonly millStorage = inject(UIMillStorage);
   private readonly preparationStorage = inject(UIPreparationStorage);
   private readonly translate = inject(TranslateService);
@@ -438,8 +440,15 @@ export class IntentHandlerService {
       return true;
     }
     try {
+      // Removing the entry does not delete its photo files, so note them
+      // first and delete them once the bean is gone.
+      const stored = this.beanStorage.getByUUID(uuid) as
+        | { attachments?: string[] }
+        | undefined;
+      const attachments = [...(stored?.attachments ?? [])];
       const didRemove = await this.beanStorage.removeByUUID(uuid);
       if (didRemove) {
+        await this.deleteHandoffBeanAttachments(attachments);
         return true;
       }
       this.uiLog.error(
@@ -455,6 +464,19 @@ export class IntentHandlerService {
           ')',
       );
       return false;
+    }
+  }
+
+  private async deleteHandoffBeanAttachments(paths: string[]): Promise<void> {
+    for (const path of paths) {
+      try {
+        await this.uiFileHelper.deleteInternalFile(path);
+      } catch (ex) {
+        this.uiLog.error(
+          'Import brew from handoff link failed to delete bean photo: ' + path,
+          ex,
+        );
+      }
     }
   }
 

@@ -319,7 +319,8 @@ matches the name, or the name is ambiguous, no bean is created. If there is no
 match, Beanconqueror asks the user whether to create it. Once a created bean
 is saved, an `imageUrl` that is an absolute `https` URL is downloaded and added
 to its photos. This uses the same download as the `external_images` of a shared
-bean, which keeps only JPEG and PNG responses. If the download fails, the bean
+bean, which keeps only responses whose Content-Type is JPEG or PNG. If the
+download fails, or attaches nothing, the bean
 stays without a photo and the import carries on. A bean that matched by name
 keeps its photos as they are. A known missing
 preparation type may be offered the same way. A missing grinder may also be
