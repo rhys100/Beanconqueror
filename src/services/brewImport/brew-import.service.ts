@@ -18,6 +18,7 @@ import type {
   IHandoffMetric,
 } from '../../interfaces/brew/IHandoff';
 import { UIAlert } from '../uiAlert';
+import { UIBeanHelper } from '../uiBeanHelper';
 import { UIBeanStorage } from '../uiBeanStorage';
 import { UIBrewStorage } from '../uiBrewStorage';
 import { UIFileHelper } from '../uiFileHelper';
@@ -77,6 +78,7 @@ export class BrewImportService {
   private readonly uiLog = inject(UILog);
   private readonly settingsStorage = inject(UISettingsStorage);
   private readonly uiAlert = inject(UIAlert);
+  private readonly uiBeanHelper = inject(UIBeanHelper);
 
   public build(envelope: IHandoffEnvelope): IBrewImportResult {
     const brew = new Brew();
@@ -224,7 +226,55 @@ export class BrewImportService {
       await this.removeFailedHandoffBean(created.config.uuid);
       throw new Error(`Handoff bean creation failed: ${created.config.uuid}`);
     }
+    await this.attachHandoffBeanImage(created, bean.imageUrl);
     return created.config.uuid;
+  }
+
+  /**
+   * Give a bean this import just created the photo the link carried.
+   *
+   * It runs after the bean is saved, so the download does not sit between the
+   * creation check and the write. The download is the one a shared bean's
+   * `external_images` go through. It skips an image it cannot fetch, and any
+   * other failure here is only logged: the bean stays, without a photo.
+   */
+  private async attachHandoffBeanImage(
+    created: Bean,
+    imageUrl: string | undefined,
+  ): Promise<void> {
+    const url = this.httpsUrl(imageUrl);
+    if (url === undefined) {
+      return;
+    }
+    try {
+      await this.uiBeanHelper.downloadAndAddAttachAttachments(created, [url]);
+      if (created.attachments.length === 0) {
+        return;
+      }
+      const didUpdate = await this.beanStorage.update(created);
+      if (!didUpdate) {
+        this.uiLog.error(
+          'Handoff bean image could not be saved: ' + created.config.uuid,
+        );
+      }
+    } catch (ex) {
+      this.uiLog.error(
+        'Handoff bean image could not be saved: ' + created.config.uuid,
+        ex,
+      );
+    }
+  }
+
+  private httpsUrl(value: string | undefined): string | undefined {
+    if (typeof value !== 'string') {
+      return undefined;
+    }
+    try {
+      const url = new URL(value);
+      return url.protocol === 'https:' ? url.href : undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   public async ensurePreparationFromHandoff(
@@ -613,8 +663,8 @@ export class BrewImportService {
     bean.beanMix = this.beanMixFromHandoff(handoffBean.beanMix);
     bean.decaffeinated = handoffBean.decaffeinated ?? false;
 
-    // Beanconqueror attachments are local file paths; remote pod images would
-    // need a downloader, permissions and lifecycle policy outside this import.
+    // Attachments are local file paths, so `imageUrl` is downloaded only once
+    // the bean is saved. See `attachHandoffBeanImage`.
     const information = this.beanInformationFromHandoff(handoffBean);
     if (information !== undefined) {
       bean.bean_information.push(information);

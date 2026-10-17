@@ -11,6 +11,7 @@ import { PREPARATION_TYPES } from '../../../enums/preparations/preparationTypes'
 import type { IHandoffEnvelope } from '../../../interfaces/brew/IHandoff';
 import { decodeHandoffPayload } from '../../intentHandler/brew-handoff.decoder';
 import { UIAlert } from '../../uiAlert';
+import { UIBeanHelper } from '../../uiBeanHelper';
 import { UIBeanStorage } from '../../uiBeanStorage';
 import { UIBrewStorage } from '../../uiBrewStorage';
 import { UIFileHelper } from '../../uiFileHelper';
@@ -196,6 +197,7 @@ describe('BrewImportService', () => {
   let fileHelper: jasmine.SpyObj<UIFileHelper>;
   let uiLog: jasmine.SpyObj<UILog>;
   let uiAlert: jasmine.SpyObj<UIAlert>;
+  let uiBeanHelper: jasmine.SpyObj<UIBeanHelper>;
   let settings: Settings;
   let beans: Bean[];
   let mills: Mill[];
@@ -207,6 +209,7 @@ describe('BrewImportService', () => {
       'getByUUID',
       'add',
       'addAndConfirm',
+      'update',
       'removeByUUID',
     ]);
     millStorage = jasmine.createSpyObj('UIMillStorage', [
@@ -236,6 +239,10 @@ describe('BrewImportService', () => {
 
     uiAlert = jasmine.createSpyObj('UIAlert', ['showConfirm']);
     uiAlert.showConfirm.and.resolveTo('NO');
+    uiBeanHelper = jasmine.createSpyObj('UIBeanHelper', [
+      'downloadAndAddAttachAttachments',
+    ]);
+    uiBeanHelper.downloadAndAddAttachAttachments.and.resolveTo();
 
     beans = [entry(new Bean(), 'Any coffee', 'bean-1')];
     mills = [entry(new Mill(), 'Any grinder', 'mill-1')];
@@ -257,6 +264,7 @@ describe('BrewImportService', () => {
         return Promise.resolve({ entry: bean, saved: true });
       },
     );
+    beanStorage.update.and.resolveTo(true);
     beanStorage.removeByUUID.and.callFake((uuid: string): Promise<boolean> => {
       const index = beans.findIndex((bean) => bean.config.uuid === uuid);
       if (index < 0) {
@@ -338,6 +346,7 @@ describe('BrewImportService', () => {
         { provide: UILog, useValue: uiLog },
         { provide: UISettingsStorage, useValue: settingsStorage },
         { provide: UIAlert, useValue: uiAlert },
+        { provide: UIBeanHelper, useValue: uiBeanHelper },
         { provide: UILog, useValue: uiLog },
         { provide: TranslateService, useValue: translate },
       ],
@@ -709,6 +718,136 @@ describe('BrewImportService', () => {
     expect(created.decaffeinated).toBe(false);
     expect(created.roaster).toBe('');
     expect(created.roastingDate).toBe('');
+  });
+
+  it('gives a created bean the image the link carried', async () => {
+    beans = [entry(new Bean(), 'Fallback coffee', 'bean-fallback')];
+    uiAlert.showConfirm.and.resolveTo('YES');
+    uiBeanHelper.downloadAndAddAttachAttachments.and.callFake(
+      (bean: Bean, urls: string[]): Promise<void> => {
+        urls.forEach(() => bean.attachments.push('download_image_1.jpg'));
+        return Promise.resolve();
+      },
+    );
+
+    const uuid = await service.ensureBeanFromHandoff(
+      envelope({
+        bean: {
+          name: 'Pod coffee',
+          origin: 'Ethiopia',
+          imageUrl: 'https://example.com/pod.jpg',
+        },
+      }),
+    );
+    const created = beans.find((bean) => bean.config.uuid === 'bean-created');
+
+    expect(uuid).toBe('bean-created');
+    expect(
+      uiBeanHelper.downloadAndAddAttachAttachments.calls.allArgs(),
+    ).toEqual([[created, ['https://example.com/pod.jpg']]]);
+    expect(created.attachments).toEqual(['download_image_1.jpg']);
+    expect(beanStorage.update.calls.allArgs()).toEqual([[created]]);
+  });
+
+  it('leaves the images of an existing bean alone', async () => {
+    uiAlert.showConfirm.and.resolveTo('YES');
+
+    const uuid = await service.ensureBeanFromHandoff(
+      envelope({
+        bean: {
+          name: 'Any coffee',
+          origin: 'Ethiopia',
+          imageUrl: 'https://example.com/pod.jpg',
+        },
+      }),
+    );
+
+    expect(uuid).toBeUndefined();
+    expect(uiBeanHelper.downloadAndAddAttachAttachments.calls.count()).toBe(0);
+    expect(beanStorage.update.calls.count()).toBe(0);
+    expect(beans[0].attachments).toEqual([]);
+  });
+
+  it('ignores an image that is not an https URL', async () => {
+    uiAlert.showConfirm.and.resolveTo('YES');
+
+    for (const imageUrl of [
+      'http://example.com/pod.jpg',
+      'file:///data/pod.jpg',
+      'javascript:alert(1)',
+      'pod.jpg',
+    ]) {
+      beans = [entry(new Bean(), 'Fallback coffee', 'bean-fallback')];
+      const uuid = await service.ensureBeanFromHandoff(
+        envelope({
+          bean: { name: 'Pod coffee', origin: 'Ethiopia', imageUrl },
+        }),
+      );
+      const created = beans.find((bean) => bean.config.uuid === 'bean-created');
+
+      expect(uuid).withContext(imageUrl).toBe('bean-created');
+      expect(created.attachments).withContext(imageUrl).toEqual([]);
+    }
+    expect(uiBeanHelper.downloadAndAddAttachAttachments.calls.count()).toBe(0);
+    expect(beanStorage.update.calls.count()).toBe(0);
+  });
+
+  it('still creates the bean when the image download fails', async () => {
+    beans = [entry(new Bean(), 'Fallback coffee', 'bean-fallback')];
+    uiAlert.showConfirm.and.resolveTo('YES');
+    uiBeanHelper.downloadAndAddAttachAttachments.and.rejectWith(
+      new Error('offline'),
+    );
+    const handoff = envelope({
+      bean: {
+        name: 'Pod coffee',
+        origin: 'Ethiopia',
+        imageUrl: 'https://example.com/pod.jpg',
+      },
+    });
+
+    const uuid = await service.ensureBeanFromHandoff(handoff);
+    const created = beans.find((bean) => bean.config.uuid === 'bean-created');
+
+    expect(uuid).toBe('bean-created');
+    expect(created.attachments).toEqual([]);
+    expect(beanStorage.update.calls.count()).toBe(0);
+    expect(beanStorage.removeByUUID.calls.count()).toBe(0);
+    expect(service.build(handoff).brew.bean).toBe('bean-created');
+  });
+
+  it('does not save the bean again when no image could be downloaded', async () => {
+    beans = [entry(new Bean(), 'Fallback coffee', 'bean-fallback')];
+    uiAlert.showConfirm.and.resolveTo('YES');
+
+    const uuid = await service.ensureBeanFromHandoff(
+      envelope({
+        bean: {
+          name: 'Pod coffee',
+          origin: 'Ethiopia',
+          imageUrl: 'https://example.com/pod.webp',
+        },
+      }),
+    );
+
+    expect(uuid).toBe('bean-created');
+    expect(uiBeanHelper.downloadAndAddAttachAttachments.calls.count()).toBe(1);
+    expect(beanStorage.update.calls.count()).toBe(0);
+  });
+
+  it('does not count an image alone as enough to create a bean', async () => {
+    beans = [entry(new Bean(), 'Fallback coffee', 'bean-fallback')];
+
+    const uuid = await service.ensureBeanFromHandoff(
+      envelope({
+        bean: { name: 'Pod coffee', imageUrl: 'https://example.com/pod.jpg' },
+      }),
+    );
+
+    expect(uuid).toBeUndefined();
+    expect(uiAlert.showConfirm.calls.count()).toBe(0);
+    expect(beanStorage.addAndConfirm.calls.count()).toBe(0);
+    expect(uiBeanHelper.downloadAndAddAttachAttachments.calls.count()).toBe(0);
   });
 
   it('removes a handoff bean whose save did not persist before later name matching can see it', async () => {
@@ -1570,9 +1709,9 @@ describe('BrewImportService', () => {
     expect(preparationStorage.removeByUUID.calls.allArgs()).toEqual([
       ['preparation-created'],
     ]);
-    expect(
-      preparations.map((preparation) => preparation.config.uuid),
-    ).toEqual(['preparation-fallback']);
+    expect(preparations.map((preparation) => preparation.config.uuid)).toEqual([
+      'preparation-fallback',
+    ]);
     expect(result.brew.method_of_preparation).toBe('preparation-fallback');
     expect(result.brew.note).toBe(
       'A completed brew\n\nPreparation not linked: "xBloom Studio" (no match). Using "Fallback brewer".',

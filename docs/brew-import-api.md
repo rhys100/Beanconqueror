@@ -175,7 +175,7 @@ provenance.
 | `note`          | string  | no       |      | Non string and empty values are ignored. Non empty strings are trimmed and at most 10,000 characters.                                                                 |
 | `beanMix`       | string  | no       |      | Non string and empty values are ignored. Non empty strings are trimmed and at most 512 characters.                                                                    |
 | `decaffeinated` | boolean | no       |      | Non boolean values are ignored.                                                                                                                                       |
-| `imageUrl`      | string  | no       |      | Non string and empty values are ignored. Non empty strings are trimmed and at most 512 characters. It is not parsed as a URL.                                         |
+| `imageUrl`      | string  | no       |      | Non string and empty values are ignored. Non empty strings are trimmed and at most 512 characters. Only an `https` URL is used.                                       |
 
 ### `brew`
 
@@ -279,7 +279,7 @@ capped at 10,000 characters, and object keys are capped at 512 characters.
 | `bean.farmer`            | Stored as `farmer` in the first `bean_information` entry on a created bean.                                                                  |
 | `bean.elevation`         | Stored as `elevation` in the first `bean_information` entry on a created bean.                                                               |
 | `bean.decaffeinated`     | Stored as `bean.decaffeinated` on a created bean. Non boolean values are ignored.                                                            |
-| `bean.imageUrl`          | Validated but not stored.                                                                                                                    |
+| `bean.imageUrl`          | Downloaded and added to the photos of a created bean when it is an `https` URL. Never applied to an existing bean.                           |
 | `brew.ratio`             | Validated but not stored by the importer. Beanconqueror derives displayed ratios from quantities.                                            |
 | `app`                    | Validated but not stored.                                                                                                                    |
 
@@ -316,7 +316,12 @@ have a name and at least one of `roaster`, `roastingDate`, `origin`, `region`,
 `farm`, `farmer`, `elevation`, `process`, `variety`, `aromatics`, `note`,
 `beanMix`, or `decaffeinated`. `imageUrl` alone does not count. If a usable bean already
 matches the name, or the name is ambiguous, no bean is created. If there is no
-match, Beanconqueror asks the user whether to create it. A known missing
+match, Beanconqueror asks the user whether to create it. Once a created bean
+is saved, an `imageUrl` that is an absolute `https` URL is downloaded and added
+to its photos. This uses the same download as the `external_images` of a shared
+bean, which keeps only JPEG and PNG responses. If the download fails, the bean
+stays without a photo and the import carries on. A bean that matched by name
+keeps its photos as they are. A known missing
 preparation type may be offered the same way. A missing grinder may also be
 offered when the name does not match one existing grinder.
 
