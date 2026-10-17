@@ -364,10 +364,7 @@ export class IntentHandlerService {
         await this.removeCreatedHandoffBean(createdBeanUuid);
       }
       if (
-        this.shouldKeepCreatedHandoffMillAfterFailedImport(
-          ex,
-          createdMillUuid,
-        )
+        this.shouldKeepCreatedHandoffMillAfterFailedImport(ex, createdMillUuid)
       ) {
         createdMillUuid = undefined;
       }
@@ -1048,7 +1045,10 @@ export class IntentHandlerService {
     return created;
   }
 
-  private removeCreatedBeanUuid(createdBeanUuids: string[], uuid: string): void {
+  private removeCreatedBeanUuid(
+    createdBeanUuids: string[],
+    uuid: string,
+  ): void {
     const index = createdBeanUuids.indexOf(uuid);
     if (index >= 0) {
       createdBeanUuids.splice(index, 1);
@@ -1198,9 +1198,8 @@ export class IntentHandlerService {
     const created: ICreatedHandoffMill[] = [];
     try {
       for (const envelope of creatableEnvelopes) {
-        const uuid = await this.brewImportService.createMillFromHandoff(
-          envelope,
-        );
+        const uuid =
+          await this.brewImportService.createMillFromHandoff(envelope);
         const millName = this.handoffMillName(envelope);
         if (uuid !== undefined && millName !== undefined) {
           createdMillUuids.push(uuid);
